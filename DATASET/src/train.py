@@ -141,6 +141,7 @@ class ModelTrainer:
             'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
             'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
             'gamma': trial.suggest_float('gamma', 1e-8, 5.0, log=True),
+            'early_stopping_rounds': 50,
             'n_jobs': -1,
             'random_state': 42
         }
@@ -149,8 +150,7 @@ class ModelTrainer:
         model.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
-            verbose=False,
-            early_stopping_rounds=50
+            verbose=False
         )
 
         y_pred = model.predict(X_val)
@@ -183,12 +183,12 @@ class ModelTrainer:
 
         print(f"\nBest XGBoost params: R² = {study.best_value:.4f}")
 
+        best_params['early_stopping_rounds'] = 50
         model = xgb.XGBRegressor(**best_params)
         model.fit(
             X_train, y_train,
             eval_set=[(X_val, y_val)],
-            verbose=False,
-            early_stopping_rounds=50
+            verbose=False
         )
 
         val_pred = np.clip(model.predict(X_val), 0, 1)

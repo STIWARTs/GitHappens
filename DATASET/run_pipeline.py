@@ -11,7 +11,7 @@ import os
 import time
 import numpy as np
 import pandas as pd
-from sklearn.metrics import r2_score
+from sklearn.metrics import r2_score, mean_squared_error
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -207,15 +207,17 @@ def main():
     lgbm_final = lgb.LGBMRegressor(**lgbm_params)
     lgbm_final.fit(X_full, y_full)
     final_models['lightgbm'] = lgbm_final
-    print("  ✓ LightGBM retrained on full data")
+    print("  [OK] LightGBM retrained on full data")
 
     # XGBoost final
-    xgb_params = trainer.best_params.get('xgboost', {})
+    xgb_params = trainer.best_params.get('xgboost', {}).copy()
     xgb_params['n_estimators'] = int(xgb_params.get('n_estimators', 1000))
+    # Remove early stopping for final retrain (no validation set)
+    xgb_params.pop('early_stopping_rounds', None)
     xgb_final = xgb.XGBRegressor(**xgb_params)
     xgb_final.fit(X_full, y_full, verbose=False)
     final_models['xgboost'] = xgb_final
-    print("  ✓ XGBoost retrained on full data")
+    print("  [OK] XGBoost retrained on full data")
 
     # CatBoost final
     cb_params = trainer.best_params.get('catboost', {})
@@ -223,7 +225,7 @@ def main():
     cb_final = cb_lib.CatBoostRegressor(**cb_params)
     cb_final.fit(X_full, y_full, verbose=0)
     final_models['catboost'] = cb_final
-    print("  ✓ CatBoost retrained on full data")
+    print("  [OK] CatBoost retrained on full data")
 
     # =====================================================================
     # STEP 7: GENERATE PREDICTIONS
