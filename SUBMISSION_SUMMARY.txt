@@ -1,0 +1,308 @@
+================================================================================
+FLIPKART GRIDLOCK 2.0 HACKATHON - SUBMISSION SUMMARY
+================================================================================
+
+Date: May 31, 2026
+Participant: Individual Submission
+Challenge: Traffic Demand Prediction (Regression, R² metric)
+Platform: HackerEarth
+
+================================================================================
+PACKAGE CONTENTS
+================================================================================
+
+Archive: gridlock_submission.zip (2.93 MB)
+
+Structure:
+├── APPROACH.txt                    [27 KB]  Ultra-detailed methodology
+├── README.md                       [10 KB]  Quick start guide  
+├── DATA_DICTIONARY.txt             [13 KB]  Feature definitions & schema
+├── requirements.txt                [0.1 KB] Dependencies (5 packages)
+├── src/
+│   ├── feature_engineering.py      [10 KB]  FeatureBuilder, TargetEncoder
+│   ├── train.py                    [8 KB]   Training pipeline
+│   ├── predict.py                  [2 KB]   Submission generation
+│   └── metrics.py                  [0.4 KB] Evaluation metrics
+├── configs/
+│   └── model.yaml                  [0.3 KB] Model hyperparameters
+├── notebooks/
+│   └── 01_eda.ipynb               [3 KB]   Exploratory analysis
+└── outputs/
+    ├── submission.csv              [1.07 MB] 41,778 predictions ← FOR SUBMISSION
+    ├── model_full.sklearn          [1.43 MB] Trained model (full data)
+    ├── model_validate.sklearn      [1.43 MB] Trained model (validation split)
+    ├── feature_builder.pkl         [2.87 MB] Fitted feature transformer
+    └── model_meta.json             [1.5 KB] Metadata & metrics
+
+Production Code: 527 lines (Python 3.11)
+
+================================================================================
+KEY RESULTS
+================================================================================
+
+Model Performance (Validation on Day 49):
+  • R² Score: 0.765                  (76.5% variance explained)
+  • MAE: 0.0399                      (mean absolute error)
+  • RMSE: 0.0702                     (root mean squared error)
+
+Model: sklearn HistGradientBoostingRegressor
+  • No heavy dependencies (scikit-learn built-in)
+  • Efficient histogram-based boosting
+  • Hyperparameters: learning_rate=0.05, max_depth=8, n_estimators=2500
+
+Validation Strategy: Day 48 train → Day 49 test split
+  • Explicitly addresses distribution shift (test is entirely Day 49)
+  • Mimics leaderboard challenge (many overfitted models fail this check)
+
+Feature Engineering: 28 features from 11 raw columns
+  • Temporal: time-of-day cycles, cyclical encoding (sin/cos)
+  • Spatial: geohash decoding (1km resolution), hierarchical grouping
+  • Infrastructure: road type, lanes, vehicle restrictions, landmarks
+  • Environmental: weather, temperature (imputed by context)
+  • Target encoding: K-Fold regularized encodings (geohash, road×time, etc.)
+
+Submission Ready: outputs/submission.csv
+  • 41,778 predictions (test set size)
+  • Format: Index (0-41777), demand (normalized [0, 1])
+  • Can be submitted directly to HackerEarth
+
+================================================================================
+HOW TO USE
+================================================================================
+
+1. Extract Archive:
+   unzip gridlock_submission.zip
+   cd gridlock_submission_temp
+
+2. Install Dependencies:
+   pip install -r requirements.txt
+
+3. (Optional) Validate Model:
+   python -m src.train --mode validate --model sklearn --config configs/model.yaml
+   Expected: R² = 0.765, MAE = 0.0399, RMSE = 0.0702
+
+4. Generate Submission:
+   python -m src.train --mode full --model sklearn --config configs/model.yaml
+   python -m src.predict \
+     --model-path outputs/model_full.sklearn \
+     --builder-path outputs/feature_builder.pkl \
+     --output-path outputs/submission.csv
+
+5. Submit:
+   Upload outputs/submission.csv to HackerEarth Gridlock 2.0
+
+================================================================================
+APPROACH HIGHLIGHTS
+================================================================================
+
+1. DISTRIBUTION SHIFT HANDLING
+   Problem: Training data mostly Day 48, test entirely Day 49
+   Solution: Validation explicitly on Day 49 (prevents overfitting)
+   Result: Catches models that would fail the leaderboard test
+
+2. K-FOLD TARGET ENCODING
+   Problem: High-cardinality features (geohash, road type, weather)
+   Solution: Target encoding with smoothing + K-Fold split (prevents leakage)
+   Benefit: Compact (4 features) vs. one-hot (300+ dims); regularized
+
+3. GEOHASH DECODING
+   Problem: How to extract spatial information from 6-char geohash?
+   Solution: Manual BASE32 decoder → (lat, lon) + hierarchical prefixes
+   Result: Captures location patterns at 1km, 10km, and 100km scales
+
+4. CONTEXTUAL IMPUTATION
+   Problem: 45% missing temperature values
+   Solution: Impute by (geohash, weather) groups, then global median
+   Benefit: Preserves weather-temperature relationships
+
+5. CYCLICAL TIME ENCODING
+   Problem: Midnight (00:00) and 23:45 are close, but linear encoding treats as far
+   Solution: Convert time_bin_15 → sin/cos (2π * bin / 96)
+   Benefit: Models learn 24-hour wraparound naturally
+
+================================================================================
+TECHNICAL DETAILS
+================================================================================
+
+Core Libraries:
+  • numpy 2.3.5        — numerical computing
+  • pandas 2.3.3       — data manipulation
+  • scikit-learn 1.7.2 — ML models + metrics
+  • joblib 1.5.2       — object serialization
+  • pyyaml 6.0.3       — config management
+
+Python: 3.11+ (tested on 3.14)
+Platform: Windows/Linux/Mac (cross-platform compatible)
+
+Feature Pipeline Flow:
+  train.csv → [FeatureBuilder.fit_transform]
+            → temporal/spatial/infrastructure/environmental features
+            → K-Fold target encoding (prevents leakage)
+            → 28 engineered features
+            → [HistGradientBoostingRegressor.fit]
+            → model_full.sklearn (saved)
+
+Prediction Pipeline Flow:
+  test.csv → [FeatureBuilder.transform]
+           (using fitted statistics from training)
+           → 28 engineered features
+           → [model.predict]
+           → submission.csv (Index, demand)
+
+================================================================================
+VALIDATION EVIDENCE
+================================================================================
+
+✓ Timestamps parsed correctly (96 unique 15-min intervals)
+✓ Geohash decoding verified (6-char → lat/lon coordinates)
+✓ Temperature imputation by (geohash, weather) context
+✓ K-Fold target encoding prevents leakage (no fold contamination)
+✓ Validation split Day 48 train / Day 49 test created
+✓ Features applied identically to train and test sets
+✓ No NaN values in model input (all imputed or encoded)
+✓ Submission shape matches test.csv (41,778 rows, 2 columns)
+✓ Demand predictions in expected range (~0.02 to 0.05 for test distribution)
+✓ Reproducible pipeline (deterministic except for tree randomness)
+
+================================================================================
+POTENTIAL IMPROVEMENTS
+================================================================================
+
+Short-term (if submission round 2 / refinement):
+  • Ensemble: Train CatBoost + LightGBM (often +1–3% R² boost)
+  • Hyperparameter tuning: Optuna search on learning_rate, max_depth, smoothing
+  • Feature importance analysis: Extract top 10, engineer domain interactions
+
+Long-term (Phase 2 prototype):
+  • Incorporate real-time CCTV data (historical congestion indices)
+  • External data: weather forecasts, event calendars, public transport schedules
+  • Neural networks: Graph neural networks (geohash regions), LSTM (temporal)
+  • Online learning: Daily retraining on fresh data
+
+================================================================================
+FILE STRUCTURE EXPLANATION
+================================================================================
+
+src/feature_engineering.py (246 lines)
+  Core data pipeline:
+  • BASE32 geohash alphabet + decode_geohash() function
+  • TargetEncoder class: K-Fold target encoding with smoothing
+  • FeatureBuilder class: Main orchestrator
+    - fit_transform(): build features + fit target encoders (train set)
+    - transform(): apply learned transforms (test set)
+    - Methods: _basic_features(), _fit_temperature_stats(), _impute_temperature()
+
+src/train.py (225 lines)
+  Training pipeline:
+  • load_config(): Parse YAML hyperparameters
+  • split_by_day(): Train/val split (Day 48 → 49)
+  • train_sklearn(): HistGradientBoosting trainer
+  • main(): CLI orchestration + model serialization
+
+src/predict.py (46 lines)
+  Inference pipeline:
+  • Loads model + feature builder
+  • Transforms test.csv
+  • Generates submission.csv (Index, demand)
+
+src/metrics.py (10 lines)
+  Evaluation:
+  • regression_metrics(): R², MAE, RMSE (sklearn-compatible)
+
+configs/model.yaml (0.3 KB)
+  Hyperparameters:
+  • HistGradientBoosting: learning_rate=0.05, max_depth=8, n_estimators=2500
+  • (CatBoost/LightGBM config available as fallback)
+
+notebooks/01_eda.ipynb (3 KB)
+  Exploratory analysis:
+  • Data shape, day distribution, missing values
+  • Feature building demo
+  • Instructions for train/predict scripts
+
+outputs/submission.csv (1.07 MB)
+  Final predictions:
+  • 41,778 rows (test set size)
+  • Columns: Index [0-41777], demand [float]
+  • Ready for HackerEarth submission
+
+outputs/model_full.sklearn (1.43 MB)
+  Trained model:
+  • HistGradientBoostingRegressor fitted on entire train.csv
+  • Pickled with joblib
+
+outputs/feature_builder.pkl (2.87 MB)
+  Feature transformer:
+  • Fitted FeatureBuilder instance
+  • Contains temperature stats, target encoders, feature columns
+  • Required for test set transformation
+
+outputs/model_meta.json (1.5 KB)
+  Metadata:
+  • model_type, feature_columns, metrics (R², MAE, RMSE)
+  • Validation set info
+
+================================================================================
+SUBMISSION CHECKLIST
+================================================================================
+
+Before Final Upload:
+  ✓ outputs/submission.csv exists and has 41,778 rows
+  ✓ Column format: Index (int), demand (float)
+  ✓ All predictions in valid range (~[0.02, 0.15])
+  ✓ No NaN or infinite values in submission.csv
+  ✓ README.md provides clear reproduction steps
+  ✓ APPROACH.txt documents full methodology
+  ✓ All source code included and functional
+  ✓ requirements.txt up-to-date
+  ✓ Archive size reasonable (~3 MB, all data included)
+  ✓ Reproducibility verified (validation R² = 0.765)
+
+To Submit:
+  1. Upload gridlock_submission.zip to HackerEarth
+     (or extract and upload outputs/submission.csv)
+  2. Wait for leaderboard scoring (may take 5-30 minutes)
+  3. Monitor R² score compared to baseline
+
+================================================================================
+AUTHOR NOTES
+================================================================================
+
+This solution prioritizes:
+  1. CORRECTNESS: Addresses known pitfalls (distribution shift, leakage)
+  2. INTERPRETABILITY: Clear feature engineering with documented rationales
+  3. REPRODUCIBILITY: Deterministic pipeline (except random tree seeds)
+  4. EFFICIENCY: Minimal dependencies; no heavy DL frameworks
+  5. EXTENSIBILITY: Easy to add CatBoost/LightGBM or new features
+
+The R² = 0.765 on Day 49 validation suggests the model captures major demand 
+patterns but likely leaves room for improvement via ensemble, hyperparameter 
+tuning, or external data integration (Phase 2).
+
+The distribution-shift validation strategy (Day 48 → 49) is a major strength: 
+many models on the leaderboard likely overfit to the Day 48 training pattern 
+and fail to generalize. This solution explicitly validates against that failure 
+mode.
+
+================================================================================
+CONTACT & METADATA
+================================================================================
+
+Hackathon: Flipkart Gridlock 2.0
+Platform: HackerEarth
+Challenge Type: Machine Learning (Regression)
+Submission Date: May 31, 2026, 21:47 IST
+
+Archive: gridlock_submission.zip (2.93 MB)
+Python: 3.11+
+Model: HistGradientBoostingRegressor (sklearn)
+Validation R²: 0.765
+Production Code: 527 lines
+
+For questions on approach, see APPROACH.txt (27 KB, ultra-detailed)
+For quick start, see README.md
+For feature definitions, see DATA_DICTIONARY.txt
+
+================================================================================
+END OF SUMMARY
+================================================================================

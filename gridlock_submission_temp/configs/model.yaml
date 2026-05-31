@@ -1,0 +1,16 @@
+model_params:
+  catboost:
+    iterations: 2500
+    learning_rate: 0.05
+    depth: 8
+    l2_leaf_reg: 4.0
+  lightgbm:
+    n_estimators: 2500
+    learning_rate: 0.05
+    num_leaves: 63
+    subsample: 0.9
+    colsample_bytree: 0.9
+  sklearn:
+    learning_rate: 0.05
+    max_depth: 8
+    max_iter: 400

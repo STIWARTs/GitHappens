@@ -1,0 +1,343 @@
+===============================================================================
+DATA DICTIONARY - GRIDLOCK 2.0 TRAFFIC DEMAND PREDICTION
+===============================================================================
+
+This document describes all columns in train.csv, test.csv, and the engineered
+features created by the FeatureBuilder pipeline.
+
+===============================================================================
+1. RAW INPUT DATA (train.csv, test.csv)
+===============================================================================
+
+Index [INTEGER]
+  Definition: Unique row identifier
+  Range: [0, 77298] (train.csv), [0, 41777] (test.csv)
+  Missing: 0
+  Notes: Preserved in submission.csv for mapping predictions back to test set
+
+geohash [STRING, 6 characters]
+  Definition: Geohash-encoded geographic location (base32, lowercase)
+  Example: "qp02z1", "qp08bj", "qp02zt"
+  Missing: 0
+  Notes: Encodes latitude/longitude with ~1 km resolution using 6 bits × 5 chars = 30 bits
+         Alternates bits: even positions = longitude, odd = latitude
+
+day [INTEGER]
+  Definition: Temporal identifier (day of training period)
+  Values: {48, 49}
+  Missing: 0
+  Distribution (train): Mostly 48, some 49
+  Distribution (test): All 49
+  Notes: Only present in train.csv; test set is entirely Day 49
+         This distribution shift is critical for model validation
+
+timestamp [STRING, "H:M" format]
+  Definition: Time of day (24-hour, 15-minute intervals)
+  Range: "0:0", "0:15", "0:30", ..., "23:30", "23:45" (96 unique values)
+  Missing: 0
+  Parsing: Convert "H:M" → minutes since midnight [0, 1440)
+           Quarter-hour index = minutes // 15 ∈ [0, 95]
+  Notes: No 24:00 format (wraps to 0:0)
+         Cyclical: time 23:45 is closer to 0:0 than to 12:00
+
+demand [FLOAT, normalized [0, 1]]
+  Definition: TARGET VARIABLE (train.csv only)
+  Range: Approximately [0.049, 0.153]
+  Missing: 0
+  Metric: R² score (sklearn.metrics.r2_score)
+  Notes: Normalized demand (not absolute vehicle counts)
+         Present in train.csv only; predicted for test.csv
+
+RoadType [CATEGORICAL]
+  Definition: Classification of road (Residential, Street, etc.)
+  Categories: {Residential, Street, Unknown}
+  Missing: ~12% of rows
+  Imputation: Filled with "Unknown"
+  Notes: High cardinality with many Residential roads
+         Used in target encoding: roadtype_time interaction
+
+NumberofLanes [INTEGER]
+  Definition: Number of traffic lanes on the road
+  Range: [1, 2, 3]
+  Missing: 0
+  Distribution: Mostly 1-2 lanes
+  Notes: Discrete ordinal variable
+         Infrastructure indicator (more lanes → more capacity)
+
+LargeVehicles [CATEGORICAL]
+  Definition: Whether large/commercial vehicles are allowed on road
+  Categories: {Allowed, Not Allowed, Unknown}
+  Missing: <1%
+  Imputation: Filled with "Unknown"
+  Encoding: binary large_vehicles_allowed ∈ {0, 1}
+  Notes: Restrictions affect commercial traffic patterns
+
+Landmarks [CATEGORICAL]
+  Definition: Whether landmarks (POI) exist near location
+  Categories: {Yes, No, Unknown}
+  Missing: <1%
+  Imputation: Filled with "Unknown"
+  Encoding: binary has_landmarks ∈ {0, 1}
+  Notes: Landmarks attract visitors, affecting traffic
+
+Temperature [FLOAT, Celsius]
+  Definition: Ambient temperature at time/location
+  Range: Approximately [-2°C, 35°C]
+  Missing: ~45% of values
+  Imputation: 
+    Step 1: Group by (geohash, weather) pairs
+    Step 2: Compute median temperature per group
+    Step 3: Forward-fill remaining with global median
+  Notes: Temperature influences traffic flow (e.g., extreme heat/cold)
+         Context-aware imputation preserves weather patterns
+
+Weather [CATEGORICAL]
+  Definition: Weather condition at time/location
+  Categories: {Sunny, Rainy, Foggy, Snowy, Unknown}
+  Missing: <1%
+  Imputation: Filled with "Unknown"
+  Notes: Major driver of traffic patterns (rain → congestion)
+         Used in target encoding: weather_time interaction
+         Temporal pattern (time of day affects likelihood of rain/fog)
+
+===============================================================================
+2. ENGINEERED FEATURES (produced by FeatureBuilder)
+===============================================================================
+
+TEMPORAL FEATURES (8 features)
+-----------------------------------
+
+time_minutes [INTEGER]
+  Definition: Minutes since midnight
+  Range: [0, 1439]
+  Computation: parse_timestamp_to_minutes("H:M")
+  Example: "14:30" → 870
+  
+time_bin_15 [INTEGER]
+  Definition: Quarter-hour index (discretized time)
+  Range: [0, 95]
+  Computation: time_minutes // 15
+  Rationale: 96 slots per day match traffic flow discretization
+  
+hour [INTEGER]
+  Definition: Hour of day
+  Range: [0, 23]
+  Computation: time_minutes // 60
+  
+minute [INTEGER]
+  Definition: Minute within hour
+  Range: [0, 59]
+  Computation: time_minutes % 60
+
+time_sin [FLOAT]
+  Definition: Sine component of cyclical time encoding
+  Formula: sin(2π × time_bin_15 / 96)
+  Range: [-1, 1]
+  Rationale: Captures 24-hour periodicity without artificial midnight cliff
+  Example: time_bin_15=0 (0:00) → angle=0 → sin=0
+           time_bin_15=24 (6:00) → angle=π/2 → sin=1
+           time_bin_15=48 (12:00) → angle=π → sin=0
+           time_bin_15=72 (18:00) → angle=3π/2 → sin=-1
+
+time_cos [FLOAT]
+  Definition: Cosine component of cyclical time encoding
+  Formula: cos(2π × time_bin_15 / 96)
+  Range: [-1, 1]
+  Rationale: Orthogonal to sin; enables model to learn phase shifts
+  
+day [INTEGER]
+  Definition: Raw day identifier
+  Values: {48, 49}
+  Notes: Redundant with is_day49, kept for interpretability
+  
+is_day49 [BINARY]
+  Definition: Binary indicator for Day 49
+  Values: {0, 1}
+  Computation: 1 if day == 49, else 0
+  Rationale: Explicit distribution-shift indicator
+
+
+SPATIAL FEATURES (6 features)
+-----------------------------------
+
+latitude [FLOAT]
+  Definition: Geographic latitude (decoded from geohash)
+  Range: Approximately [12.8°N, 13.1°N] (Bengaluru bounds)
+  Computation: decode_geohash(geohash)[0]
+  Notes: Enables distance-based calculations, spatial clustering
+  
+longitude [FLOAT]
+  Definition: Geographic longitude (decoded from geohash)
+  Range: Approximately [77.5°E, 77.8°E] (Bengaluru bounds)
+  Computation: decode_geohash(geohash)[1]
+
+geo_distance [FLOAT]
+  Definition: Euclidean distance from dataset centroid
+  Computation: sqrt((lat - lat_mean)² + (lon - lon_mean)²)
+  Rationale: Proximity to city center might correlate with traffic patterns
+  
+geohash_4 [STRING]
+  Definition: First 4 characters of geohash (coarser spatial grouping)
+  Resolution: ~100 km scale
+  Rationale: Hierarchical grouping; used for target encoding
+  Example: "qp02z1" → "qp02"
+  
+geohash_5 [STRING]
+  Definition: First 5 characters of geohash (intermediate grouping)
+  Resolution: ~10 km scale
+  Rationale: Hierarchical grouping; used for target encoding
+  Example: "qp02z1" → "qp02z"
+
+geohash [STRING]
+  Definition: Original 6-character geohash (preserved)
+  Notes: Used as primary grouping key for target encoding
+
+
+INFRASTRUCTURE & BINARY FEATURES (5 features)
+-----------------------------------
+
+large_vehicles_allowed [BINARY]
+  Definition: Whether large vehicles are permitted
+  Values: {0, 1}
+  Computation: 1 if LargeVehicles == "Allowed", else 0
+  Missing (original): Imputed as "Unknown" → 0
+  
+has_landmarks [BINARY]
+  Definition: Whether landmarks/POI exist nearby
+  Values: {0, 1}
+  Computation: 1 if Landmarks == "Yes", else 0
+  Missing (original): Imputed as "Unknown" → 0
+
+NumberofLanes [INTEGER]
+  Definition: Number of lanes (preserved from raw input)
+  Range: [1, 3]
+  
+RoadType [CATEGORICAL]
+  Definition: Road classification (preserved from raw input)
+  Categories: {Residential, Street, Unknown}
+  Missing: Imputed as "Unknown"
+  Notes: Used for target encoding interactions
+
+Weather [CATEGORICAL]
+  Definition: Weather condition (preserved from raw input)
+  Categories: {Sunny, Rainy, Foggy, Snowy, Unknown}
+  Notes: Used for target encoding interactions
+
+
+ENVIRONMENTAL FEATURES (2 features)
+-----------------------------------
+
+Temperature [FLOAT]
+  Definition: Ambient temperature (imputed)
+  Range: Approximately [-2°C, 35°C]
+  Missing (original): ~45%
+  Imputation: See raw input section (grouped by geohash × weather, then global)
+  
+Weather [CATEGORICAL]
+  Definition: Weather condition (preserved from raw input)
+  Categories: {Sunny, Rainy, Foggy, Snowy, Unknown}
+
+
+TARGET-ENCODED INTERACTION FEATURES (4 features)
+-----------------------------------
+
+geohash_te [FLOAT]
+  Definition: Target-encoded average demand per geohash location
+  Computation: K-Fold target encoding with smoothing=10
+  Range: Approximately [0.05, 0.15] (similar to target range)
+  Regularization: James-Stein shrinkage
+                  encoded_value = (sum(targets) + global_mean × 10) / (count + 10)
+  Leakage prevention: K-Fold ensures training fold targets never encode validation fold
+  Rationale: Compact geospatial demand signature; replaces one-hot encoding
+
+geohash_time_te [FLOAT]
+  Definition: Target-encoded average demand per (geohash, time_bin_15) pair
+  Computation: K-Fold target encoding with smoothing=10
+  Rationale: Captures location-specific time-of-day patterns
+  Example: Residential area might have peak at 8:00 (commute) and 18:00 (evening)
+           vs. commercial district with different rush hours
+  
+roadtype_time_te [FLOAT]
+  Definition: Target-encoded average demand per (RoadType, time_bin_15) pair
+  Computation: K-Fold target encoding with smoothing=10
+  Rationale: Captures road-type-specific temporal patterns
+  Example: Residential streets might differ from busy streets in time profile
+  
+weather_time_te [FLOAT]
+  Definition: Target-encoded average demand per (Weather, time_bin_15) pair
+  Computation: K-Fold target encoding with smoothing=10
+  Rationale: Captures weather-specific time-of-day patterns
+  Example: Rush hour congestion might be worse on rainy days
+
+
+INTERACTION KEYS (created for target encoding, categorical)
+-----------------------------------
+
+geohash_time [STRING]
+  Definition: Concatenated key for (geohash, time_bin_15) interactions
+  Format: "{geohash}_{time_bin_15}"
+  Example: "qp02z1_8" (geohash qp02z1 at 2:00 AM)
+  
+roadtype_time [STRING]
+  Definition: Concatenated key for (RoadType, time_bin_15) interactions
+  Format: "{RoadType}_{time_bin_15}"
+  Example: "Residential_45" (Residential road at 11:15 AM)
+  
+weather_time [STRING]
+  Definition: Concatenated key for (Weather, time_bin_15) interactions
+  Format: "{Weather}_{time_bin_15}"
+  Example: "Rainy_50" (Rainy weather at 12:30 PM)
+
+===============================================================================
+3. SUBMISSION OUTPUT (submission.csv)
+===============================================================================
+
+Index [INTEGER]
+  Definition: Test row identifier (from test.csv)
+  Range: [0, 41777]
+  
+demand [FLOAT]
+  Definition: Predicted normalized traffic demand
+  Range: Approximately [0.04, 0.15]
+  Source: HistGradientBoostingRegressor.predict()
+  Notes: 41,778 predictions for test set
+
+===============================================================================
+4. MODEL METADATA (model_meta.json)
+===============================================================================
+
+{
+  "model_type": "sklearn.HistGradientBoostingRegressor",
+  "feature_columns": [list of 20+ numeric features used in training],
+  "model_feature_columns": [same list, post-engineering],
+  "metrics": {
+    "r2": 0.765,
+    "mae": 0.0399,
+    "rmse": 0.0702,
+    "computed_on": "Day 49 validation set"
+  },
+  "validation_set": "Day 49 rows from train.csv",
+  "model_path": "outputs/model_full.sklearn",
+  "feature_builder_path": "outputs/feature_builder.pkl"
+}
+
+===============================================================================
+5. SUMMARY STATISTICS (training data)
+===============================================================================
+
+train.csv (77,299 rows)
+  • Temporal coverage: Day 48 (complete), Day 49 (partial)
+  • Time coverage: All 96 quarter-hour slots
+  • Spatial coverage: ~1000+ unique geohashes
+  • Demand distribution: skewed toward lower values (most 0.05-0.08)
+  • Missing values:
+    - RoadType: 12%
+    - Temperature: 45%
+    - Others: <1%
+
+test.csv (41,778 rows)
+  • Temporal: Day 49 only, timestamp 2:15 (time_bin_15=9)
+  • All geohashes from test set
+  • No demand column (to be predicted)
+
+===============================================================================
