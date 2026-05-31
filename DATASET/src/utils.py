@@ -206,5 +206,5 @@ def validate_submission(submission: pd.DataFrame, test: pd.DataFrame) -> bool:
     if not (submission['Index'].values == test['Index'].values).all():
         print("ERROR: Index mismatch with test file")
         return False
-    print(f"✓ Submission valid: {submission.shape[0]} rows, demand range [{submission['demand'].min():.6f}, {submission['demand'].max():.6f}]")
+    print(f"[OK] Submission valid: {submission.shape[0]} rows, demand range [{submission['demand'].min():.6f}, {submission['demand'].max():.6f}]")
     return True
