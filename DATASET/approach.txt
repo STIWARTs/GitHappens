@@ -1,0 +1,128 @@
+================================================================================
+FLIPKART GRIDLOCK 2.0 — TRAFFIC DEMAND PREDICTION
+Approach Document
+================================================================================
+
+1. APPROACH OVERVIEW
+====================
+
+We built a 3-model ensemble (LightGBM + XGBoost + CatBoost) optimized with
+Optuna hyperparameter search to predict normalized traffic demand across
+~1,190 geohash locations on Day 49 (timestamps 2:15 to 13:45).
+
+Our approach is grounded in deep exploratory data analysis which revealed that:
+- Geohash identity alone explains ~80% of demand variance
+- Lag-1 autocorrelation within geohash is 0.96
+- "Static" features (Lanes, LargeVehicles, Landmarks) are synthetically noisy
+  (95%+ inconsistency across rows for the same geohash)
+- Temperature/Weather are deterministic (perfectly correlated) and have near-zero
+  impact on demand — they are distractors
+- RoadType and NumberofLanes carry strong signal at the geohash level
+
+
+2. FEATURE ENGINEERING
+======================
+
+We engineered 70+ features across 7 categories:
+
+A) TEMPORAL FEATURES (8 features)
+   - hour, minute, time_slot (15-min index 0-95)
+   - Cyclical: sin/cos hour, sin/cos slot
+   - Binary indicators: is_morning_rush, is_evening_low, is_peak_demand, is_night
+
+B) GEOHASH IDENTITY FEATURES (10 features)
+   - Per-geohash aggregates from Day 48: mean, median, std, min, max, count,
+     q25, q75, IQR, coefficient of variation
+
+C) GEOHASH × TIME INTERACTION FEATURES (9 features) — KEY DRIVER
+   - Per-(geohash, hour): mean, median, std, min, max
+   - Per-(geohash, time_slot): mean, median, last
+   - Day 48 same-slot demand as direct lookup
+
+D) LAG / AUTOREGRESSIVE FEATURES (14 features) — TWO STRATEGIES
+   Strategy 1 (Static Proxy): Use Day 48 same-slot values for lags 1-4
+   Strategy 2 (History-Based): Use Day 49 0:00-2:00 actual history where
+     available, falling back to static proxy
+   Both included: lag1-4, rolling_mean_2, rolling_mean_4, diff_1
+
+E) SPATIAL FEATURES (8 features)
+   - Geohash prefix5/prefix4 region aggregates (mean, median, std, count)
+   - Spatial rank ratio (geohash vs region average)
+   - Decoded latitude/longitude coordinates
+
+F) ROAD INFRASTRUCTURE FEATURES (10 features)
+   - Row-level: road_type_encoded, is_highway, is_street, is_high_capacity,
+     large_vehicles_encoded, landmarks_encoded
+   - Modal (denoised): modal_road_type, modal_lanes, modal_large_vehicles,
+     modal_landmarks per geohash (majority vote across all rows)
+
+G) WEATHER FEATURES (2 features)
+   - temperature_filled (NaN imputed by weather-group mean)
+   - weather_encoded (ordinal: Snowy<Rainy<Foggy<Sunny)
+
+H) INTERACTION & DEVIATION FEATURES (6 features)
+   - gh_mean_x_hour, modal_road_x_demand, lanes_x_demand
+   - demand_deviation_from_gh_mean, demand_deviation_from_global
+   - demand_percentile_in_gh
+
+
+3. MODEL ARCHITECTURE
+=====================
+
+Three gradient boosting models trained independently:
+
+A) LightGBM — Primary model
+   - GBDT boosting with histogram-based splits
+   - Handles high-cardinality features efficiently
+   - Optuna-tuned: 40 trials
+
+B) XGBoost — Secondary model
+   - Different tree-building strategy (exact greedy)
+   - Provides ensemble diversity
+   - Optuna-tuned: 30 trials
+
+C) CatBoost — Tertiary model
+   - Ordered boosting to reduce overfitting
+   - Strong with categorical features
+   - Optuna-tuned: 25 trials
+
+Final prediction = weighted average of all three models.
+Weights computed via softmax of validation R² scores.
+
+
+4. TRAINING STRATEGY
+====================
+
+- Temporal validation split: Day 48 slots 0-71 (train) vs 72-95 (validate)
+- This simulates predicting future demand — avoids information leakage
+- After tuning, all models retrained on full data (Day 48 + Day 49 0:00-2:00)
+- Predictions clipped to [0, 1] range
+
+Handling unseen geohashes (10 in test):
+- Fallback to prefix5 spatial region statistics
+- Then prefix4 region statistics
+- Final fallback: global median demand for that time slot
+
+
+5. TOOLS USED
+=============
+
+- Python 3.10+
+- pandas, numpy — data manipulation
+- scikit-learn — metrics and preprocessing
+- LightGBM — gradient boosting
+- XGBoost — gradient boosting
+- CatBoost — gradient boosting
+- Optuna — hyperparameter optimization
+
+
+6. SOURCE FILES
+===============
+
+run_pipeline.py        — Main orchestration script
+src/
+  utils.py             — Geohash utilities, validation splits, data loading
+  features.py          — Feature engineering pipeline (FeatureEngine class)
+  train.py             — Model training with Optuna (ModelTrainer class)
+models/                — Saved model artifacts
+submissions/           — Generated submission CSVs
