@@ -1,0 +1,58 @@
+================================================================================
+APPROACH: Flipkart Gridlock 2.0 - Traffic Demand Prediction
+================================================================================
+
+TEAM APPROACH SUMMARY
+---------------------
+
+1. PROBLEM UNDERSTANDING
+   - Predict normalized traffic demand (0-1) for 41,778 test rows
+   - Test window: Day 49, timestamps 2:15 to 13:45
+   - Evaluation: R-squared score (higher is better)
+
+2. KEY DATA INSIGHTS
+   - Geohash (location) identity explains ~69% of demand variance
+   - Clear diurnal cycle: demand rises 0:00-11:00, peaks at midday, troughs at 18:00
+   - Lag-1 autocorrelation is weak (~0.20 mean), making iterative prediction unreliable
+   - "Static" features (NumberofLanes, LargeVehicles, Landmarks) are synthetically noisy 
+     (95%+ inconsistency per geohash) - denoised using modal values per geohash
+   - Weather/Temperature are deterministic and have near-zero impact on demand (distractors)
+   - Highway roads have ~10x higher demand than Residential (0.616 vs 0.057)
+   - 10 test geohashes are unseen in training - handled via spatial prefix fallback
+
+3. FEATURE ENGINEERING
+   Key features (by importance):
+   a) Geohash x Time Slot interactions - Day 48 same-slot lookups (strongest signal)
+   b) Geohash identity aggregates - mean, median, std, quantiles of demand per location
+   c) Temporal features - hour, time_slot, cyclical sin/cos encodings, rush-hour flags
+   d) Day 48 proxy lag features - previous/next slot demands from Day 48 (NOT iterative)
+   e) Spatial features - geohash prefix clustering, neighbor mean demand
+   f) Road infrastructure - modal road type, lane count (denoised per geohash)
+   g) Weather - ordinal encoding (low priority, included for completeness)
+
+4. MODELING APPROACH
+   - Primary: LightGBM with Optuna hyperparameter tuning
+   - Secondary: XGBoost and CatBoost for ensemble diversity
+   - Final: Weighted average ensemble with optimized weights via scipy minimize
+   - Predictions clipped to [0, 1] range
+
+5. VALIDATION STRATEGY
+   - Temporal validation to avoid data leakage (no random K-fold)
+   - Approach A: Day 48 time-based split (train 0:00-17:45, val 18:00-23:45)
+   - Approach B: Cross-day split (Day 48 train, Day 49 0:00-2:00 val)
+
+6. CRITICAL DESIGN DECISION
+   - NO iterative prediction used: With weak autocorrelation (0.20), feeding predictions
+     as lag features would accumulate errors. Instead, Day 48 same-slot lookups provide
+     a much more reliable signal for the daily periodic pattern.
+
+7. TOOLS USED
+   - Python 3.10+
+   - LightGBM, XGBoost, CatBoost (gradient boosting models)
+   - Optuna (hyperparameter optimization)
+   - scikit-learn (metrics, preprocessing)
+   - pandas, numpy (data manipulation)
+   - matplotlib, seaborn (visualization)
+   - scipy (ensemble weight optimization)
+
+================================================================================
