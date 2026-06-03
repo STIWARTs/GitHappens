@@ -77,6 +77,25 @@ class FeatureEngine:
         self.global_hour_stats = d48.groupby('_hour')['demand'].agg(['mean', 'median', 'std']).to_dict('index')
         self.global_slot_stats = d48.groupby('_slot')['demand'].agg(['mean', 'median']).to_dict('index')
 
+        # ---------- Per-geohash temporal profile stats ----------
+        # Morning (slots 8-48, ~2:00-12:00) vs afternoon (slots 48-72, ~12:00-18:00)
+        d48['_morning'] = ((d48['_slot'] >= 8) & (d48['_slot'] <= 48)).astype(int)
+        d48['_afternoon'] = ((d48['_slot'] > 48) & (d48['_slot'] <= 72)).astype(int)
+        d48['_early_morning'] = ((d48['_slot'] >= 0) & (d48['_slot'] < 24)).astype(int)
+        d48['_late_morning'] = ((d48['_slot'] >= 32) & (d48['_slot'] <= 56)).astype(int)
+
+        gh_morning = d48[d48['_morning'] == 1].groupby('geohash')['demand'].agg(['mean', 'std']).rename(
+            columns={'mean': 'gh_morning_mean', 'std': 'gh_morning_std'})
+        gh_afternoon = d48[d48['_afternoon'] == 1].groupby('geohash')['demand'].agg(['mean']).rename(
+            columns={'mean': 'gh_afternoon_mean'})
+        gh_early = d48[d48['_early_morning'] == 1].groupby('geohash')['demand'].agg(['mean']).rename(
+            columns={'mean': 'gh_early_morning_mean'})
+        gh_late_morning = d48[d48['_late_morning'] == 1].groupby('geohash')['demand'].agg(['mean']).rename(
+            columns={'mean': 'gh_late_morning_mean'})
+
+        self.gh_temporal_profile = gh_morning.join(gh_afternoon, how='outer').join(
+            gh_early, how='outer').join(gh_late_morning, how='outer').to_dict('index')
+
         # ---------- Modal static features per geohash ----------
         # Use ALL training data for modal computation (more samples = more robust mode)
         for gh in df['geohash'].unique():
@@ -251,6 +270,43 @@ class FeatureEngine:
         result['demand_deviation_from_gh_mean'] = result['gh_d48_same_slot'] - result['gh_mean']
         result['demand_deviation_from_global'] = result['gh_d48_same_slot'] - self.global_mean_demand
         result['demand_percentile_in_gh'] = (result['gh_d48_same_slot'] - result['gh_min']) / (result['gh_max'] - result['gh_min'] + 1e-10)
+
+        # ===== TEMPORAL PROFILE FEATURES =====
+        # These capture time-of-day shape and generalize across days
+        # Morning ramp: demand change from slot 8 to current slot's D48 value
+        result['morning_ramp'] = result['gh_d48_same_slot'] - result['gh_mean']
+        # Normalized time-of-day position within geohash's range
+        result['tod_position'] = (result['gh_d48_same_slot'] - result['gh_min']) / (result['gh_max'] - result['gh_min'] + 1e-10)
+        # Distance from start of known Day49 history (slot 9 = first test slot)
+        result['slot_distance_from_history'] = np.clip(result['time_slot'] - 8, 0, 60)
+        # Proximity to morning peak hours (slot 44 = 11:00, slot 52 = 13:00)
+        result['morning_peak_proximity'] = 1.0 - np.minimum(
+            np.abs(result['time_slot'] - 44),
+            np.abs(result['time_slot'] - 52)
+        ) / 48.0
+        # Is the slot in the rising phase (morning) or falling phase
+        result['is_rising_phase'] = ((result['time_slot'] >= 0) & (result['time_slot'] <= 48)).astype(int)
+        # Hour-of-day normalized demand expectation (ratio of hour mean to geohash mean)
+        result['hour_demand_ratio'] = result['gh_hour_mean'] / (result['gh_mean'] + 1e-10)
+        # Slot normalized demand (ratio of slot mean to hour mean)
+        result['slot_hour_ratio'] = result['gh_slot_mean'] / (result['gh_hour_mean'] + 1e-10)
+
+        # ===== GEOHASH TEMPORAL PROFILE (from fit) =====
+        if hasattr(self, 'gh_temporal_profile'):
+            tp = self.gh_temporal_profile
+            global_morning = self.global_mean_demand
+            for col, default in [('gh_morning_mean', global_morning), ('gh_morning_std', 0),
+                                  ('gh_afternoon_mean', global_morning), ('gh_early_morning_mean', global_morning),
+                                  ('gh_late_morning_mean', global_morning)]:
+                result[col] = result['geohash'].map(
+                    lambda gh, c=col, d=default: tp.get(gh, {}).get(c, d)
+                )
+            # Morning-to-overall ratio (how much higher is morning demand vs average)
+            result['gh_morning_ratio'] = result['gh_morning_mean'] / (result['gh_mean'] + 1e-10)
+            # Morning-to-afternoon ratio (shape of the demand curve)
+            result['gh_morning_afternoon_ratio'] = result['gh_morning_mean'] / (result['gh_afternoon_mean'] + 1e-10)
+            # Late morning boost (how much higher is late morning vs early morning)
+            result['gh_late_morning_boost'] = result['gh_late_morning_mean'] - result['gh_early_morning_mean']
 
         # Store feature column list
         self.feature_cols = self._get_feature_columns(result)

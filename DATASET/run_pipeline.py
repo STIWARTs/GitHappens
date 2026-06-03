@@ -120,30 +120,26 @@ def main():
     # =====================================================================
     print("\n[STEP 3] Creating validation split...")
 
-    # Use temporal split: train on Day48 early, validate on Day48 late
-    d48_featured = train_featured[train_featured['day'] == 48]
-    d48_featured = d48_featured.copy()
+    # PRIMARY: Day 48 afternoon/evening (slots 48-95, ~12:00-23:45)
+    # Has high demand variance and covers diverse time patterns
+    d48_featured = train_featured[train_featured['day'] == 48].copy()
     d48_featured['_slot'] = d48_featured['timestamp'].apply(timestamp_to_slot)
-
-    # Split: train on slots 0-71 (0:00-17:45), validate on slots 72-95 (18:00-23:45)
-    val_cutoff = 72
+    val_cutoff = 48  # noon onwards — high demand variance, diverse patterns
     train_split = d48_featured[d48_featured['_slot'] < val_cutoff]
-    val_split = d48_featured[d48_featured['_slot'] >= val_cutoff]
+    val_split_d48 = d48_featured[d48_featured['_slot'] >= val_cutoff]
 
-    X_train = train_split[feature_cols]
+    X_train = train_split[feature_cols].fillna(0)
     y_train = train_split['demand']
-    X_val = val_split[feature_cols]
-    y_val = val_split['demand']
+    X_val = val_split_d48[feature_cols].fillna(0)
+    y_val = val_split_d48['demand']
+    print(f"  Train: Day48 slots 0-47 ({len(X_train)} rows, 0:00-11:45)")
+    print(f"  Val:   Day48 slots 48-95 ({len(X_val)} rows, 12:00-23:45)")
 
-    print(f"  Train split: {len(X_train)} rows (slots 0-71)")
-    print(f"  Val split:   {len(X_val)} rows (slots 72-95)")
-
-    # Also test Day-based validation
-    d49_featured = train_featured[train_featured['day'] == 49]
-    if len(d49_featured) > 0:
-        X_val_d49 = d49_featured[feature_cols]
-        y_val_d49 = d49_featured['demand']
-        print(f"  Day 49 val:  {len(X_val_d49)} rows")
+    # Day 49 monitoring set
+    d49_featured = train_featured[train_featured['day'] == 49].copy()
+    X_val_d49 = d49_featured[feature_cols].fillna(0)
+    y_val_d49 = d49_featured['demand']
+    print(f"  Day 49 monitor:  {len(X_val_d49)} rows (0:00-2:00)")
 
     # =====================================================================
     # STEP 4: TRAIN MODELS
@@ -156,33 +152,40 @@ def main():
     X_val = X_val.fillna(0)
 
     # --- LightGBM ---
-    trainer.train_lightgbm(X_train, y_train, X_val, y_val, n_trials=40)
+    trainer.train_lightgbm(X_train, y_train, X_val, y_val, n_trials=60)
 
     # --- XGBoost ---
-    trainer.train_xgboost(X_train, y_train, X_val, y_val, n_trials=30)
+    trainer.train_xgboost(X_train, y_train, X_val, y_val, n_trials=45)
 
     # --- CatBoost ---
-    trainer.train_catboost(X_train, y_train, X_val, y_val, n_trials=25)
+    trainer.train_catboost(X_train, y_train, X_val, y_val, n_trials=35)
 
     # =====================================================================
     # STEP 5: ENSEMBLE & VALIDATION
     # =====================================================================
     print("\n[STEP 5] Computing ensemble...")
-    weights = trainer.compute_ensemble_weights()
+    weights = trainer.compute_ensemble_weights(X_val, y_val)
 
     # Validate ensemble on both splits
-    for name, (X_v, y_v) in [("Time-split", (X_val, y_val))]:
-        X_v = X_v.fillna(0)
-        pred = trainer.predict_ensemble(pd.DataFrame(X_v, columns=feature_cols), weights)
+    print("\n  --- Ensemble Validation ---")
+    for label, X_v, y_v in [
+        ("Day48 afternoon (PRIMARY)", X_val, y_val),
+        ("Day49 morning (monitor)", X_val_d49, y_val_d49),
+    ]:
+        X_v_clean = X_v.fillna(0)
+        pred = trainer.predict_ensemble(pd.DataFrame(X_v_clean.values, columns=feature_cols), weights)
         score = max(0, 100 * r2_score(y_v, pred))
         rmse = np.sqrt(mean_squared_error(y_v, pred))
-        print(f"\n  Ensemble on {name}: R² = {score:.4f}, RMSE = {rmse:.6f}")
+        print(f"  {label}: R² = {score:.4f}, RMSE = {rmse:.6f}")
 
-    if len(d49_featured) > 0:
-        X_val_d49_clean = d49_featured[feature_cols].fillna(0)
-        pred_d49 = trainer.predict_ensemble(pd.DataFrame(X_val_d49_clean.values, columns=feature_cols), weights)
-        score_d49 = max(0, 100 * r2_score(y_val_d49, pred_d49))
-        print(f"  Ensemble on Day-49 train: R² = {score_d49:.4f}")
+    # Also show individual model scores
+    print("\n  --- Individual Model Scores ---")
+    for model_name, model in trainer.models.items():
+        pred_d48 = np.clip(model.predict(X_val), 0, 1)
+        pred_d49 = np.clip(model.predict(X_val_d49), 0, 1)
+        s48 = max(0, 100 * r2_score(y_val, pred_d48))
+        s49 = max(0, 100 * r2_score(y_val_d49, pred_d49))
+        print(f"  {model_name:12s}: D48 R² = {s48:.4f}, D49 R² = {s49:.4f}")
 
     # =====================================================================
     # STEP 6: RETRAIN ON FULL DATA

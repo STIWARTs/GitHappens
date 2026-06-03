@@ -48,14 +48,14 @@ class ModelTrainer:
             'boosting_type': 'gbdt',
             'n_estimators': trial.suggest_int('n_estimators', 500, 3000),
             'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.1, log=True),
-            'max_depth': trial.suggest_int('max_depth', 4, 12),
-            'num_leaves': trial.suggest_int('num_leaves', 20, 200),
-            'min_child_samples': trial.suggest_int('min_child_samples', 10, 100),
-            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
-            'min_split_gain': trial.suggest_float('min_split_gain', 1e-8, 1.0, log=True),
+            'max_depth': trial.suggest_int('max_depth', 5, 10),
+            'num_leaves': trial.suggest_int('num_leaves', 20, 100),
+            'min_child_samples': trial.suggest_int('min_child_samples', 20, 150),
+            'subsample': trial.suggest_float('subsample', 0.6, 0.95),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 0.9),
+            'reg_alpha': trial.suggest_float('reg_alpha', 0.001, 10.0, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0.001, 10.0, log=True),
+            'min_split_gain': trial.suggest_float('min_split_gain', 0.0001, 5.0, log=True),
             'n_jobs': -1,
             'random_state': 42
         }
@@ -134,13 +134,13 @@ class ModelTrainer:
             'verbosity': 0,
             'n_estimators': trial.suggest_int('n_estimators', 500, 3000),
             'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.1, log=True),
-            'max_depth': trial.suggest_int('max_depth', 4, 12),
-            'min_child_weight': trial.suggest_int('min_child_weight', 1, 50),
-            'subsample': trial.suggest_float('subsample', 0.6, 1.0),
-            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 1.0),
-            'reg_alpha': trial.suggest_float('reg_alpha', 1e-8, 10.0, log=True),
-            'reg_lambda': trial.suggest_float('reg_lambda', 1e-8, 10.0, log=True),
-            'gamma': trial.suggest_float('gamma', 1e-8, 5.0, log=True),
+            'max_depth': trial.suggest_int('max_depth', 4, 10),
+            'min_child_weight': trial.suggest_int('min_child_weight', 3, 40),
+            'subsample': trial.suggest_float('subsample', 0.6, 0.95),
+            'colsample_bytree': trial.suggest_float('colsample_bytree', 0.5, 0.9),
+            'reg_alpha': trial.suggest_float('reg_alpha', 0.001, 10.0, log=True),
+            'reg_lambda': trial.suggest_float('reg_lambda', 0.01, 10.0, log=True),
+            'gamma': trial.suggest_float('gamma', 0.001, 5.0, log=True),
             'early_stopping_rounds': 50,
             'n_jobs': -1,
             'random_state': 42
@@ -213,11 +213,11 @@ class ModelTrainer:
         params = {
             'iterations': trial.suggest_int('iterations', 500, 3000),
             'learning_rate': trial.suggest_float('learning_rate', 0.005, 0.1, log=True),
-            'depth': trial.suggest_int('depth', 4, 10),
-            'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 0.1, 10.0, log=True),
-            'border_count': trial.suggest_int('border_count', 32, 255),
-            'bagging_temperature': trial.suggest_float('bagging_temperature', 0.0, 10.0),
-            'random_strength': trial.suggest_float('random_strength', 1e-8, 10.0, log=True),
+            'depth': trial.suggest_int('depth', 4, 9),
+            'l2_leaf_reg': trial.suggest_float('l2_leaf_reg', 0.5, 10.0, log=True),
+            'border_count': trial.suggest_int('border_count', 64, 255),
+            'bagging_temperature': trial.suggest_float('bagging_temperature', 0.5, 10.0),
+            'random_strength': trial.suggest_float('random_strength', 0.01, 10.0, log=True),
             'verbose': 0,
             'random_seed': 42,
             'loss_function': 'RMSE',
@@ -286,26 +286,67 @@ class ModelTrainer:
     #  ENSEMBLE
     # =========================================================================
 
-    def compute_ensemble_weights(self) -> Dict[str, float]:
+    def compute_ensemble_weights(self, X_val=None, y_val=None) -> Dict[str, float]:
         """
-        Compute ensemble weights based on validation R² scores.
-        Uses softmax of scores for smooth weighting.
+        Compute ensemble weights.
+        If X_val/y_val provided: optimize via brute-force grid search on validation R².
+        Otherwise: use softmax of validation scores.
         """
         scores = self.val_scores.copy()
         if not scores:
             return {}
 
-        # Softmax-like weighting
-        max_score = max(scores.values())
-        exp_scores = {k: np.exp(5 * (v - max_score)) for k, v in scores.items()}  # temperature=5
-        total = sum(exp_scores.values())
-        weights = {k: v / total for k, v in exp_scores.items()}
+        # If validation data provided, optimize weights directly
+        if X_val is not None and y_val is not None and len(self.models) >= 2:
+            print("\n  Optimizing ensemble weights on validation data...")
+            predictions = {}
+            for name, model in self.models.items():
+                predictions[name] = np.clip(model.predict(X_val[self.feature_cols]), 0, 1)
+
+            model_names = list(predictions.keys())
+            n_models = len(model_names)
+            best_score = -1
+            best_weights = {}
+
+            # Grid search over weight combinations (step=0.05)
+            step = 0.05
+            if n_models == 3:
+                for w1 in np.arange(0, 1.01, step):
+                    for w2 in np.arange(0, 1.01 - w1, step):
+                        w3 = 1.0 - w1 - w2
+                        if w3 < -0.001:
+                            continue
+                        w3 = max(0, w3)
+                        pred = w1 * predictions[model_names[0]] + w2 * predictions[model_names[1]] + w3 * predictions[model_names[2]]
+                        pred = np.clip(pred, 0, 1)
+                        score = r2_score(y_val, pred)
+                        if score > best_score:
+                            best_score = score
+                            best_weights = {model_names[0]: w1, model_names[1]: w2, model_names[2]: w3}
+            elif n_models == 2:
+                for w1 in np.arange(0, 1.01, step):
+                    w2 = 1.0 - w1
+                    pred = w1 * predictions[model_names[0]] + w2 * predictions[model_names[1]]
+                    pred = np.clip(pred, 0, 1)
+                    score = r2_score(y_val, pred)
+                    if score > best_score:
+                        best_score = score
+                        best_weights = {model_names[0]: w1, model_names[1]: w2}
+
+            print(f"  Optimized R²: {max(0, 100*best_score):.4f}")
+            weights = best_weights
+        else:
+            # Softmax-like weighting fallback
+            max_score = max(scores.values())
+            exp_scores = {k: np.exp(5 * (v - max_score)) for k, v in scores.items()}
+            total = sum(exp_scores.values())
+            weights = {k: v / total for k, v in exp_scores.items()}
 
         print("\n" + "=" * 60)
-        print("ENSEMBLE WEIGHTS (based on validation R²)")
+        print("ENSEMBLE WEIGHTS")
         print("=" * 60)
         for name, weight in sorted(weights.items(), key=lambda x: -x[1]):
-            print(f"  {name:12s}: weight = {weight:.4f}  (val R² = {scores[name]:.4f})")
+            print(f"  {name:12s}: weight = {weight:.4f}  (val R² = {scores.get(name, 0):.4f})")
 
         self.ensemble_weights = weights
         return weights
