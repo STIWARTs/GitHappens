@@ -67,3 +67,62 @@ GitHappens/
   - Cross-day d49/d48 calibration (ratio + delta)
   - Lag features (same-slot + neighbours ±1, ±2)
 - **Recent context:** Early-morning day-49 observations
+
+## Getting Started
+
+### Requirements
+- Python 3.8+
+- `pandas`, `numpy`, `lightgbm`, `torch`, `scikit-learn`
+- `matplotlib`, `seaborn` (for plotting)
+
+### Setup
+```bash
+pip install pandas numpy lightgbm torch scikit-learn matplotlib seaborn
+```
+
+### Run Training
+Open and execute `final_notebook.ipynb` in Jupyter:
+```bash
+jupyter notebook final_notebook.ipynb
+```
+
+The notebook trains both stages and generates submissions in `outputs/`.
+
+### Quick Inference
+```python
+import pandas as pd
+
+# Load pre-trained predictions
+gbm_preds = pd.read_csv('outputs/10-LightGBM.csv')
+seq_preds = pd.read_csv('outputs/3-Transformer.csv')
+final_blend = pd.read_csv('outputs/anti5_extrapolation.csv')
+
+print(final_blend.head())
+```
+
+## Tools & Libraries
+
+| Tool | Purpose |
+|---|---|
+| `pandas`, `numpy` | Data wrangling, matrix ops |
+| `lightgbm` | Gradient boosted tree ensemble |
+| `torch` | Seq2Seq Transformer model |
+| `scikit-learn` | Metrics (R²), utilities |
+| `matplotlib`, `seaborn` | EDA & visualisation |
+
+## Next Steps (Future Work)
+
+- Validate blend weights with geohash-grouped cross-validation
+- Explore spatial encoders (graph conv / attention) for inter-geohash signal sharing
+- Add learned calibration layers (per-geohash scaling) regularised by neighbourhood priors
+- Fine-tune hyperparameters on larger holdout set
+
+## GIT HAPPENS - Team Details
+- [Anvesha Yadav](https://github.com/Anveshayadav28)
+- [Ashika Agrawal](https://github.com/ashikaagrawal28)
+- [Piyush Verma](https://github.com/piyerx)
+- [Stiwart Stance Saxena](https://github.com/STIWARTs)
+
+---
+
+**Disclaimer:** This solution leverages public leaderboard feedback for final tuning (blend weights, extrapolation). When deploying in practice, ensure proper cross-validation grouped by geohash and time to reduce data leakage risk.
